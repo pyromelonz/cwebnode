@@ -70,4 +70,8 @@ size_t* hm_set(hashmap_t* hm,const char* key, void* data, enum HASH_MAP_STORE_FL
 
 size_t* hm_get_it(hashmap_t* hm,const char* key);
 
+hm_save(const char* path, hashmap_t* hm, int(*data_write)(void* data, int fd));
+
+int hm_load(const char* path, hashmap_t* hm, void* (*data_read)(int fd)) ;
+
 #endif //HASHMAP_H
