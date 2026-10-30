@@ -52,11 +52,9 @@ web_node* new_web_node(wna_t aspects, stk_t init_list) {
     wn->parent = 0;
     wn->id = 0;
     {
-        size_t datasize = 0;
-        for (wna_index i = 0; i<WNA_COUNT; i++) {
-            datasize += !!(aspects & wna_i2f(i)) * wna_struct_sizes[i];
-        }
-        wn->data = datasize ? sw_malloc(datasize) : 0;
+        const size_t datasize = wna_struct_size_total(aspects);
+        /* Zero-initialize aspect data: some constructors expect empty stacks. */
+        wn->data = datasize ? sw_calloc(1, datasize) : 0;
     }
 
     while (init_list) {

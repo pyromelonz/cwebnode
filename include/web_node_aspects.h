@@ -11,6 +11,7 @@ extern const void (*wna_aspect_funcs[])(dummy_handler*, web_node*);
 extern const void (*wna_destructors[])(void*);
 extern const void (*wna_constructors[])(void* data, void* init, web_node* wn);
 extern const size_t wna_struct_sizes[WNA_COUNT];
+extern const size_t wna_struct_alignments[WNA_COUNT];
 
 #define HTML_TAGLIST \
 X(plain) \
@@ -33,6 +34,7 @@ enum WNA_HTML_TAGS {
 };
 
 size_t wna_struct_offset(wna_t aspects, wna_flag aspect);
+size_t wna_struct_size_total(wna_t aspects);
 
 void* wna_get_aspect_struct(web_node* wn, wna_flag aspect);
 

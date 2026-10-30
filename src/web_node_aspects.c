@@ -215,12 +215,32 @@ const void (*wna_constructors[])(void*, void*, web_node*) = {WEB_NODE_ASPECT_LIS
 const size_t wna_struct_sizes[WNA_COUNT] = {WEB_NODE_ASPECT_LIST};
 #undef X
 
-size_t wna_struct_offset(wna_t aspects, wna_flag aspect) {
+#define X(a) _Alignof(WNA_DATA_STRUCT(a)),
+const size_t wna_struct_alignments[WNA_COUNT] = {WEB_NODE_ASPECT_LIST};
+#undef X
+
+/* Each aspect has its own C alignment requirements. In particular,
+ * CSS_REF is one byte while STRING_RESOURCE contains a pointer; simply
+ * summing sizeof(struct) values misaligns the latter. */
+static size_t wna_layout_size_to(wna_t aspects, wna_flag target) {
     size_t offset = 0;
-    for (wna_index i = 0; (1<<i) < aspect; i++) {
-        offset += !!((1<<i) & aspects) * wna_struct_sizes[i];
+    for (wna_index i = 0; i < WNA_COUNT; i++) {
+        const wna_flag flag = wna_i2f(i);
+        if (!(aspects & flag)) continue;
+        const size_t align = wna_struct_alignments[i];
+        offset = (offset + align - 1) & ~(align - 1);
+        if (flag == target) return offset;
+        offset += wna_struct_sizes[i];
     }
     return offset;
+}
+
+size_t wna_struct_offset(wna_t aspects, wna_flag aspect) {
+    return wna_layout_size_to(aspects, aspect);
+}
+
+size_t wna_struct_size_total(wna_t aspects) {
+    return wna_layout_size_to(aspects, 0);
 }
 
 void* wna_get_aspect_struct(web_node* wn, wna_flag aspect) {

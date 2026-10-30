@@ -25,6 +25,7 @@ static web_node* dom_auth_page(const char* title, web_node* form) {
     return NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
         WNA_SUBNODES(
             NEW_WN(WNA_HTML(h1), STRRS_REFSTC(title)),
+            DOM_red_black_border_css(),
             form
         ));
 }

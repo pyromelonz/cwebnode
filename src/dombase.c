@@ -1,6 +1,7 @@
 #include "dombase.h"
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 web_node* DOM_vert( stk_t nodes) {
     for (stk_t i = nodes; i; i=i->next) {
@@ -149,3 +150,100 @@ web_node* DOM_register_form(void) {
 
 
 
+
+/* CSS dimension tokens may be lengths, percentages, keywords, or functions
+ * such as calc(100% - 2rem). Keep declarations and HTML out of user values. */
+static int dom_css_dimension_valid(const char* value) {
+    if (!value || !*value) return 0;
+
+    unsigned have_letter_or_digit = 0;
+    size_t i = 0;
+    for (; value[i] && i < 127; ++i) {
+        const char ch = value[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9')) {
+            have_letter_or_digit = 1;
+        } else if (ch != ' ' && ch != '%' && ch != '-' && ch != '+' &&
+                   ch != '*' && ch != '/' && ch != '.' && ch != ',' &&
+                   ch != '(' && ch != ')' && ch != '_') {
+            return 0;
+        }
+    }
+    return !value[i] && have_letter_or_digit;
+}
+
+/* A CSS_REF styles its direct parent, not the children of that parent.
+ * Use duplicated string storage: style[] is local to this constructor. */
+web_node* DOM_box_css(const char* width, const char* height) {
+    if ((!width && !height) ||
+        (width && !dom_css_dimension_valid(width)) ||
+        (height && !dom_css_dimension_valid(height))) return NULL;
+
+    char style[320];
+    const int size = snprintf(style, sizeof(style),
+        "box-sizing: border-box;%s%s%s%s%s%s",
+        width ? " width: " : "", width ? width : "", width ? ";" : "",
+        height ? " height: " : "", height ? height : "", height ? ";" : "");
+    if (size < 0 || (size_t)size >= sizeof(style)) return NULL;
+
+    return NEW_WN(WNA_CSS_REF, 0, STRRS_REFDUP(style));
+}
+
+web_node* DOM_box_css_px(unsigned width_px, unsigned height_px) {
+    char width[24], height[24];
+    snprintf(width, sizeof(width), "%upx", width_px);
+    snprintf(height, sizeof(height), "%upx", height_px);
+    return DOM_box_css(width, height);
+}
+
+web_node* DOM_box_on(web_node* target, const char* width, const char* height) {
+    if (!target || !(target->aspects & WNA_HTML_BODY) ||
+        !(target->aspects & WNA_CHILDREN)) return NULL;
+
+    web_node* style = DOM_box_css(width, height);
+    if (!style) return NULL;
+    if (wn_attach(target, style) != OK) {
+        delete_web_node(style);
+        return NULL;
+    }
+    return target;
+}
+
+/* A CSS_REF node styles its parent HTML element through the generated ID.
+ * Unlike global CSS, each instance can be attached wherever it is needed. */
+web_node* DOM_red_black_border_css_custom(unsigned border_px,
+                                          unsigned padding_px,
+                                          unsigned radius_px) {
+    char style[192];
+    int count = snprintf(style, sizeof(style),
+        "background-color: red; border: %upx black; "
+        "padding: %upx; border-radius: %upx; box-sizing: border-box;",
+        border_px, padding_px, radius_px);
+    if (count < 0 || (size_t)count >= sizeof(style)) return NULL;
+
+    /* STRRS_REFDUP is important: style[] is only alive during this call. */
+    return NEW_WN(WNA_CSS_REF, 0, STRRS_REFDUP(style));
+}
+
+web_node* DOM_red_black_border_css(void) {
+    return DOM_red_black_border_css_custom(10, 5, 0);
+}
+
+web_node* DOM_red_black_border_on(web_node* target) {
+    if (!target || !(target->aspects & WNA_HTML_BODY) ||
+        !(target->aspects & WNA_CHILDREN)) return NULL;
+
+    web_node* style = DOM_red_black_border_css();
+    if (!style) return NULL;
+    if (wn_attach(target, style) != OK) {
+        delete_web_node(style);
+        return NULL;
+    }
+    return target;
+}
+
+web_node* DOM_red_black_border_box(web_node* content) {
+    if (!content) return NULL;
+    return NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
+        WNA_SUBNODES(content, DOM_red_black_border_css()));
+}
