@@ -158,3 +158,224 @@ size_t* hm_get_it(hashmap_t* hm,const char* key) {
     hm_hit(hm,key,&hit);
     return hm->data[hit.index].index;
 }
+
+//SAVING HASH MAP TO FILE
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <unistd.h>
+
+static int hm_write_exact(int fd, const void* buf, size_t size) {
+    const unsigned char* p = buf;
+    while (size) {
+        ssize_t n = write(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { if (!n) errno = EIO; return -1; }
+        p += n;
+        size -= (size_t)n;
+    }
+    return 0;
+}
+
+static int hm_read_exact(int fd, void* buf, size_t size) {
+    unsigned char* p = buf;
+    while (size) {
+        ssize_t n = read(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { if (!n) errno = EIO; return -1; }
+        p += n;
+        size -= (size_t)n;
+    }
+    return 0;
+}
+
+/* Fixed little-endian lengths, independent of sizeof(size_t). */
+static int hm_write_u64(int fd, uint64_t value) {
+    unsigned char bytes[8];
+    for (unsigned i = 0; i < 8; i++) bytes[i] = (unsigned char)(value >> (8 * i));
+    return hm_write_exact(fd, bytes, sizeof(bytes));
+}
+
+static int hm_read_u64(int fd, uint64_t* value) {
+    unsigned char bytes[8];
+    if (hm_read_exact(fd, bytes, sizeof(bytes)) < 0) return -1;
+    *value = 0;
+    for (unsigned i = 0; i < 8; i++) *value |= (uint64_t)bytes[i] << (8 * i);
+    return 0;
+}
+
+int hm_save(const char* path, hashmap_t* hm,
+            int (*data_write)(void* data, int fd)) {
+    static const char magic[4] = {'H', 'M', '0', '1'};
+    if (!path || !hm || !data_write) { errno = EINVAL; return -1; }
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+
+    int result = -1;
+    uint64_t count = 0;
+
+    // Count occupied slots, independent of flags and n_entries
+    for (size_t i = 0; i < hm->cap; i++)
+        if (!is_tomb(&hm->data[i])) count++;
+
+    if (hm_write_exact(fd, magic, sizeof(magic)) < 0 ||
+        hm_write_u64(fd, count) < 0) goto done;
+
+    for (size_t i = 0; i < hm->cap; i++) {
+        entry_t* e = &hm->data[i];
+        if (is_tomb(e)) continue;
+
+        size_t key_len = strlen(e->key);
+        if (hm_write_u64(fd, (uint64_t)key_len) < 0 ||
+            hm_write_exact(fd, e->key, key_len) < 0) goto done;
+
+        // Reserve payload length, then backfill after writing
+        off_t len_pos = lseek(fd, 0, SEEK_CUR);
+        if (len_pos < 0 || hm_write_u64(fd, 0) < 0) goto done;
+
+        off_t begin = lseek(fd, 0, SEEK_CUR);
+        if (begin < 0) goto done;
+
+        int written = data_write(e->data, fd);
+        off_t end = lseek(fd, 0, SEEK_CUR);
+
+        if (written < 0 || end < begin || end - begin != written) {
+            errno = EIO;
+            goto done;
+        }
+
+        if (lseek(fd, len_pos, SEEK_SET) < 0 ||
+            hm_write_u64(fd, (uint64_t)written) < 0 ||
+            lseek(fd, end, SEEK_SET) < 0) goto done;
+    }
+
+    result = 0;
+
+done:
+    if (close(fd) < 0) result = -1;
+    return result;
+}
+
+
+int hm_load(const char* path, hashmap_t* hm,
+            void* (*data_read)(int fd)) {
+    static const char magic[4] = {'H', 'M', '0', '1'};
+    if (!path || !hm || !data_read) { errno = EINVAL; return -1; }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    int result = -1;
+    hashmap_t* fresh = new_hm();
+    if (!fresh) {
+        close(fd);
+        errno = ENOMEM;
+        return -1;
+    }
+    fresh->hash_func = hm->hash_func;
+
+    char header[4];
+    uint64_t count;
+
+    if (hm_read_exact(fd, header, sizeof(header)) < 0 ||
+        memcmp(header, magic, sizeof(header)) != 0 ||
+        hm_read_u64(fd, &count) < 0) {
+        errno = EINVAL;
+        goto done;
+    }
+
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t key_len, value_len;
+        char* key = NULL;
+        void* value = NULL;
+
+        if (hm_read_u64(fd, &key_len) < 0 ||
+            key_len > SIZE_MAX - 1) {
+            errno = EINVAL;
+            goto fail_entry;
+        }
+
+        key = sw_malloc((size_t)key_len + 1);
+        if (!key) {
+            errno = ENOMEM;
+            goto fail_entry;
+        }
+
+        if (hm_read_exact(fd, key, (size_t)key_len) < 0)
+            goto fail_entry;
+
+        key[key_len] = '\0';
+
+        if (memchr(key, '\0', (size_t)key_len)) {
+            errno = EINVAL;
+            goto fail_entry;
+        }
+
+        queres_t hit;
+        hm_hit2(fresh, key, &hit);
+        if (!is_tomb(hit.p)) {
+            errno = EINVAL;
+            goto fail_entry;
+        }
+
+        if (hm_read_u64(fd, &value_len) < 0 ||
+            value_len > INT_MAX) {
+            errno = EINVAL;
+            goto fail_entry;
+        }
+
+        off_t begin = lseek(fd, 0, SEEK_CUR);
+        if (begin < 0) goto fail_entry;
+
+        // Callback allocates and returns the restored value
+        value = data_read(fd);
+
+        off_t end = lseek(fd, 0, SEEK_CUR);
+        if (!value || end < begin ||
+            (uint64_t)(end - begin) != value_len) {
+            errno = EIO;
+            goto fail_entry;
+        }
+
+        hm_set(fresh, key, value,
+               HM_STORE_KEYDUP | HM_STORE_FREEDATA);
+        sw_free(key);
+        continue;
+
+fail_entry:
+        sw_free(key);
+        sw_free(value);
+        goto done;
+    }
+
+    if (close(fd) < 0) {
+        fd = -1;
+        goto done;
+    }
+    fd = -1;
+
+    // Replace contents, preserving existing mutexes and hash function
+    entry_t* old_data = hm->data;
+    size_t old_cap = hm->cap;
+    size_t old_count = hm->n_entries;
+
+    hm->data = fresh->data;
+    hm->cap = fresh->cap;
+    hm->n_entries = fresh->n_entries;
+
+    fresh->data = old_data;
+    fresh->cap = old_cap;
+    fresh->n_entries = old_count;
+
+    result = 0;
+
+done:
+    for (int i = 0; i < N_HM_MUTEXES; i++)
+        pthread_mutex_destroy(&fresh->mutex[i]);
+
+    delete_hm(fresh);
+    if (fd >= 0 && close(fd) < 0) result = -1;
+    return result;
+}
