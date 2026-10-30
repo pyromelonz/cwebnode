@@ -1,0 +1,390 @@
+#include "web_misc.h"
+#include "log.h"
+#include <misc.h>
+#include <string.h>
+#include <rb.h>
+#include "header_site.h"
+#include "container.h"
+
+#include <stdarg.h>
+
+rbtree* css_elements = 0;
+
+typedef struct {
+    const char* css_class;
+    const char* css_style;
+    uint32_t css_id;
+} css_element_t;
+
+static int csscmp(const void* _a, const void* _b) {
+    const css_element_t *a = _a, *b = _b;
+    return strcmp(a->css_class,b->css_class);
+}
+
+void web_misc_init() {
+    css_elements = rb_create(csscmp,sw_free);
+    LOG(DBG,"initialized web misc css elements tree");
+}
+
+static uint32_t css_id_counter = 0;
+
+void add_css_class(const char * class_name, const char* style) {
+    LOG(DBG,"adding css class %s with style %s",class_name,style);
+    if (class_name && style && *class_name && *style) {
+        css_element_t* e = sw_malloc(sizeof(css_element_t));
+        e->css_class = class_name;
+        if (rb_find(css_elements,e)) {
+            LOG(WARN,"Tried adding CSS element twice");
+            sw_free(e); return;
+        }
+        e->css_style = style;
+        e->css_id = css_id_counter++;
+        rb_insert(css_elements,e);
+    } else {
+        LOG(WARN,"Invalid CSS element addition");
+    }
+}
+
+
+//html template 2
+
+uint16_t str2uint16(const char* str) {
+    uint16_t val = 0;
+    if (!(str && *str && str[1])) return 0;
+    return (str[0] << 8) | str[1];
+}
+
+int template_token_parse(const char* str, int (*token_func)(const char* tok, void* cookie), void* cookie, int (*rest_func)(const char* str, void* cookie)) {
+    if (!str) return -1;
+    char* const fmt_copy = sw_strdup(str), *ctx_ptr;
+
+    unsigned char in_token = 0;
+    int acc = 0;
+    char* token = strtok_r(fmt_copy, "{", &ctx_ptr);
+
+    while (token) {
+        if (in_token || rest_func) acc += (in_token ? token_func : rest_func)(token,cookie);
+        token = strtok_r(ctx_ptr,in_token ? "{" : "}", &ctx_ptr);
+        in_token = !in_token;
+    }
+
+    sw_free(fmt_copy);
+
+    return acc;
+}
+
+typedef struct html_element_creation_token_func_struct {
+    va_list* arglist;
+    web_node* he;
+} _hectfs;
+
+int html_element_creation_token_func (const char* tok, void* cookie) {
+    _hectfs* c = cookie;
+    va_list args;
+    va_copy(args,*c->arglist);
+
+    unsigned n_html_elements_to_enqueue = 1; //for use in switch
+
+    switch(str2uint16(tok)) {
+        case 0x6964: // "id"
+            c->he->id = va_arg(args, const char*);
+            break;
+        case 0x7374: // "st"
+            c->he->class = va_arg(args, const char*);
+            break;
+        case 0x3a5f: // "::"
+            //excessive sub elements
+            if (!*(tok+2)) break; //none supplied
+
+            char* endptr = 0;
+            n_html_elements_to_enqueue = strtoul(tok+2,&endptr,0);
+            if (*endptr) break; //invalid number format lets throw it away
+
+        case 0x6874: // "ht"     signle nested html
+            while (n_html_elements_to_enqueue--) {
+                dq_push_f(c->he->sub_html, va_arg(args, html_element*));
+            }
+            break;
+        default:
+            LOG(WARN,"unknown template token in html element generator: %s",tok);
+    }
+
+    va_copy(*c->arglist, args);
+    va_end(args);
+
+    return 0;
+}
+
+
+void destroy_html_element(void* _he) {
+    LOG(DBG,"destruction called with pointer %p",_he);
+    //NOT FINISHED
+    html_element* he = _he;
+    if (!he) return;
+    dlt_dq(he->sub_html);
+    sw_free(he);
+}
+
+//input html with following templates: {ht} -> sub element : html_element*, {id} -> id : const char*, {st} -> style class_name : const char*, {at} : auto tag (class and id if present)
+html_element* create_html_element(const char* body_fmt, ...) {
+
+    LOG(DBG,"creating html element with body format: %s", body_fmt);
+    if (!body_fmt) {
+        LOG(WARN,"invalid format for html element generator"); return 0;
+    }
+
+    html_element* he = sw_malloc(sizeof(html_element));
+    he->id = 0;
+    he->class = 0;
+    he->sub_html = new_dq(destroy_html_element);
+    he->body_fmt = body_fmt;
+
+    va_list args;
+    va_start(args, body_fmt);
+
+    _hectfs cookie = {
+        &args, he
+    };
+
+    template_token_parse(body_fmt,html_element_creation_token_func, &cookie,0);
+   
+    va_end(args);
+
+    LOG(DBG,"created html element with id: %s, class: %s\n body is: %s\n", he->id ? he->id : "none", he->class ? he->class : "none", he->body_fmt ? he->body_fmt : "none");
+
+    return he;
+}
+
+typedef struct accumulate_css_classes_token_func_struct {
+    bitset_t* bs;
+    html_element* he;
+} _accsctf;
+
+int accumulate_css_classes_token_func(const char* tok, void* cookie) {
+    _accsctf* c = cookie;
+
+    switch(str2uint16(tok)) {
+        case 0x7374: // "st"
+                rbnode* cssnode = rb_find(css_elements, &(css_element_t){ .css_class = c->he->class });
+                if (!cssnode) {
+                    LOG(WARN,"no css style found for class %s", c->he->class);
+                } else {
+                    bitset_set(c->bs, ((css_element_t*)cssnode->data)->css_id);
+                }
+            break;
+        case 0x6874: // "ht"
+            {
+                html_element* sub_he = dq_pop_b(c->he->sub_html);
+                if (sub_he) {
+                    _accsctf sub_cookie = { c->bs, sub_he };
+                    template_token_parse(sub_he->body_fmt, accumulate_css_classes_token_func, &sub_cookie, 0);
+                    dq_push_f(c->he->sub_html, sub_he); //put it back
+                }
+            }
+            break;
+        default:
+            LOG(WARN,"unknown template token in html element css accumulator: %s",tok);
+    }
+
+    return 0;
+}
+
+typedef struct css_print_cookie_struct {
+    dummy_handler* s;
+    bitset_t* bs;
+} _cpc;
+
+int css_filtered_print_func(void* data, void* cookie) {
+    bitset_t* bs = ((_cpc*)cookie)->bs;
+    css_element_t* e = data;
+    
+    if (bitset_get(bs, e->css_id)) {
+        printHTML(((_cpc*)cookie)->s,".%s{\n%s\n}\n",e->css_class,e->css_style);
+    }
+    return 0;
+}
+
+void print_html_element_css(dummy_handler* s, html_element* he) {
+    if (!he) {
+        LOG(WARN,"can't print css for null html element");
+        return;
+    }
+
+    bitset_t *bs = bitset_create(css_id_counter);
+
+    _accsctf cookie = { bs, he };
+
+    template_token_parse(he->body_fmt, accumulate_css_classes_token_func, &cookie, 0);
+
+    _cpc print_cookie = { s, bs };
+
+    printHTML(s,"<style>\n");
+    RB_APPLY(css_elements,css_filtered_print_func,&print_cookie,INORDER);
+    printHTML(s,"</style>\n");
+
+    bitset_destroy(bs);
+
+}
+
+
+typedef struct deliver_html_template_token_func_struct {
+    dummy_handler* s;
+    html_element* he;
+} _dhttf;
+
+int deliver_html_helper(dummy_handler* s, html_element* he);
+
+int deliver_html_template_token_func(const char* tok, void* cookie) {
+
+    if (!cookie || !((_dhttf*)cookie)->he) {
+        LOG(WARN,"invalid cookie for deliver html template token func");
+        return -1;
+    }
+
+    dummy_handler* s = ((_dhttf*)cookie)->s;
+    html_element* he = ((_dhttf*)cookie)->he;
+
+    int ret = 0;
+
+    int n_html_elements_to_deliver = 1;
+
+    switch(str2uint16(tok)) {
+        case 0x6964: // "id"
+            printHTML(s,"id=\"%s\" ", he->id);
+            break;
+        case 0x7374: // "st"
+            printHTML(s,"class=\"%s\" ", he->class);
+            css_element_t ce;
+            ce.css_class = he->class;
+
+            rbnode* cssnode = rb_find(css_elements, &ce);
+            if (!cssnode) {
+                LOG(WARN,"no css style found for class %s", he->class);
+                ret = -1;
+            }
+            break;
+        case 0x3a5f: // "::"
+            if (*(tok+2)) {
+                char* endptr = 0;
+                n_html_elements_to_deliver = strtoul(tok+2,&endptr,0);
+                if (*endptr) break; //invalid number format lets throw it away
+            } else n_html_elements_to_deliver = -1; // let it loop until html elements are empty
+
+        case 0x6874: // "ht"
+            sw_stk_t stk = 0;
+            while (n_html_elements_to_deliver--) {
+                html_element* ht = dq_pop_b(he->sub_html);
+                if (!ht) {
+                    LOG(DBG,"no sub html elements left to deliver");
+                    break;
+                }
+                LOG(DBG,"html_sub_element class: %s, id: %s, body: %s", ht->class ? ht->class : "none", ht->id ? ht->id : "none", ht->body_fmt ? ht->body_fmt : "none");
+                ret += deliver_html_helper(s, ht);
+                stk = stack_push(stk, ht); //store to put back later
+            }
+            void* retour;
+            while ( retour = stack_pop(&stk)) {
+                dq_push_b(he->sub_html, retour);
+            }
+            break;
+        default:
+            LOG(WARN,"unknown template token in html element generator: %s",tok);
+    }
+    return ret;
+}
+
+int deliver_html_rest_parse_func(const char* str, void* cookie) {
+    dummy_handler* s = ((_dhttf*)cookie)->s;
+    printHTML(s,"%s",str);
+    return 0;
+}
+
+int deliver_html_helper(dummy_handler* s, html_element* he) {
+    if (!he || !he->body_fmt) {
+        LOG(WARN,"can't deliver empty html");
+        return -1;
+    }
+
+    LOG(DBG,"delivering html element with body format: %s, class : %s", he->body_fmt, he->class ? he->class : "none");
+
+    _dhttf cookie;
+
+    cookie.s = s;
+    cookie.he = he;
+
+    return template_token_parse(he->body_fmt, deliver_html_template_token_func, &cookie, deliver_html_rest_parse_func);
+}
+
+int deliver_html(dummy_handler* s, html_element* he) {
+    
+    print_html_element_css(s, he);
+
+    int ret = deliver_html_helper(s, he);
+
+    return ret;
+}
+
+/*
+
+static const char* form_name = 0;
+
+void start_form(dummy_handler* s, const char* form_name_in, const char* form_action) {
+    form_name = form_name_in;
+    printHTML(s,"<h1>%s</h1>\n",form_name);
+    printHTML(s,"<form action=\"%s\" method=\"post\"\n>",form_action);
+}
+
+void form_element_type(dummy_handler* s, const char* label, const char* element_name, const char* input_type) {
+    printHTML(s,"<label for=\"%s\">%s</label>",element_name,label);
+    printHTML(s,"<input type=\"%s\" id=\"%s\" name=\"%s\" required><br><br>", input_type, element_name, element_name);
+}
+
+void form_element(dummy_handler* s, const char* label, const char* element_name) {
+    return form_element_type(s,label,element_name,"password");
+}
+
+void end_form(dummy_handler*s) {
+    printHTML(s,"<button type=\"submit\"%s</button></form>",form_name);
+    form_name = 0;
+}
+
+// formfmt: "<formname> [<type> <label> <element>]"
+void make_form(dummy_handler* s, const char* formfmt, const char* action) {
+    if (!formfmt) {
+        LOG(WARN,"invalid format for form generator"); return;
+    }
+
+    char* str = sw_strdup(formfmt), *tok[3];
+    
+    tok[0] = strtok(str," ");
+
+    if (!tok[0] || !tok[0][0]) {
+        LOG(WARN,"invalid format for form generator"); return;
+    }
+
+    start_form(s,tok[0],action);
+
+    unsigned char valid = 1;
+
+    while (valid) {
+        for (unsigned char i = 0; i<3; i++) {
+            tok[i] = strtok(0," ");
+            if (!tok[i] || !tok[i][0]) {
+                valid = 0; break;
+            }
+        }
+        if (valid)
+        form_element_type(s,tok[1],tok[2],tok[0]);
+    }
+
+    end_form(s);
+    sw_free(str);
+}
+*/
+
+void web_misc_term() {
+    if (css_elements) {
+        rb_destroy(css_elements);
+        css_elements = 0;
+    }
+}

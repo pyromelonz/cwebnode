@@ -1,0 +1,93 @@
+CC      := gcc
+CFLAGS  := -Iinclude -I -Ilib/include -Ilib/src/libcwebui/lib/include -Wall
+LDFLAGS := -Llib -lrbtree -lcrypto -lssl -lpthread
+
+BIN_DIR := bin
+VAR_DIR := var
+SSL_DIR ?= cert
+
+SHELL := /bin/bash
+
+SRC := src/*.c src/third_party/*.c
+
+# ------------------------------------------------
+
+.PHONY: all clean ssl
+
+all: release
+
+$(BIN_DIR):
+	mkdir -p $@
+
+$(VAR_DIR):
+	mkdir -p $@
+	mkdir $@/uploads
+	echo '1.0.0' > var/version.txt
+
+lib/libWebserver.so:
+	cd lib/src/libcwebui && $(MAKE) -C lib
+	ln -sf lib/src/libcwebui/lib/lib/libWebserver.so lib/libWebserver.so
+
+ws_deps: $(BIN_DIR) $(VAR_DIR) $(WEBUI_LIB)
+
+# ------------------------------------------------
+# SSL sanity check (runtime contract)
+
+ssl:
+	@if [ ! -d "$(SSL_DIR)" ]; then \
+		echo "ERROR: SSL cert directory not found."; \
+		echo "Either:"; \
+		echo "  export SSL_CERT_DIR=/path/to/certs"; \
+		echo "or:"; \
+		echo "  ln -s /etc/ssl certs"; \
+		exit 1; \
+	fi
+
+# ------------------------------------------------
+# Build macros
+
+define build
+	$(CC) $(CFLAGS) $(1) \
+	-lWebserver \
+	-Wl,-rpath,$(WEBUI_DIR)/lib/lib \
+	$(LDFLAGS) \
+	-o $(BIN_DIR)/$(2) $(SRC)
+	cp $(BIN_DIR)/$(2) $(BIN_DIR)/pyromelonz.net
+endef
+
+# ------------------------------------------------
+# Targets
+
+pyromelonz.net: release_https
+	mv bin/release_https bin/pyromelonz.net
+
+release_http: ws_deps
+	$(call build,,release_http)
+
+release_https: ws_deps ssl
+	$(call build,-DUSE_SSL,release_https)
+
+release: release_https
+	mv bin/release_https bin/pyromelonz.net
+	kill "$(cat /home/dev/server.pid)"
+
+debug_http: ws_deps
+	$(call build,-ggdb -DLOG_VERBOSITY=1 -DDEBUG_MEM,debug_http)
+
+mem_debug_http: ws_deps
+	$(call build,-ggdb -DLOG_VERBOSITY=0 -DDEBUG_MEM_V,mem_debug_http)
+
+debug_https: ws_deps ssl
+	$(call build,-ggdb -DUSE_SSL -DLOG_VERBOSITY=1 -DDEBUG_MEM,debug_https)
+
+mem_debug_https: ws_deps ssl
+	$(call build,-ggdb -DUSE_SSL -DLOG_VERBOSITY=0 -DDEBUG_MEM_V,mem_debug_https)
+
+
+launch: $(BIN_DIR)/pyromelonz.net
+	scp $(BIN_DIR)/pyromelonz.net dev@pyromelonz.net:webserver/bin/pyromelonz.net
+	curl pyromelonz.net/shutdown_dev
+
+clean:
+	rm -rf bin var/* third_party/libcwebui/lib/lib/*
+	$(MAKE) -C $(WEBUI_DIR) clean
