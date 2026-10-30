@@ -21,10 +21,6 @@ typedef struct {
     X(upload_file) \
     X(promote_user) \
     X(shutdown_dev) \
-    X(where) \
-    X(the_sky_opens) \
-    X(view_messages) \
-    X(edited)
 
 #define WR_DAT_NAME(x) _wr_dat##x
 

@@ -3,7 +3,7 @@
 
 
 #ifndef SCRAMBLEKEY
-#define SCRAMBLEKEY 0xf2641923
+//#define SCRAMBLEKEY 0xf2641923
 #endif
 
 #define ROOT_USERNAME "admin"

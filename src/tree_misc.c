@@ -6,6 +6,11 @@
 
 #include "config.h"
 
+#ifdef SCRAMBLEKEY
+#define SCRAMBLE
+#endif
+
+
 struct savecookie {
     FILE* file;
     size_t item_size;
@@ -19,7 +24,9 @@ int tree_save_helper(void* d,void* sizecookie) {
     if (!copy) return 1;
 
     memcpy(copy, d, c->item_size);
+	#ifdef SCRAMBLE
     scramble(copy, SCRAMBLEKEY, c->item_size);
+	#endif
     int write_failed = fwrite(copy, c->item_size, 1, c->file) != 1;
     sw_free(copy);
     return write_failed;
@@ -66,7 +73,9 @@ err_t tree_load(const char* path, rbtree* t, size_t data_size) {
 
 		void* buffer = sw_malloc(data_size);
 		while( data_size == fread(buffer,1,data_size,file) ){
+			#ifdef SCRAMBLE
 			unscramble(buffer, SCRAMBLEKEY, data_size);
+			#endif
 			rbnode* tmp = rb_insert(t, buffer);
 			buffer = sw_malloc(data_size);
 		}

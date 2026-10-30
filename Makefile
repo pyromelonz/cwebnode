@@ -87,6 +87,10 @@ launch: $(BIN_DIR)/pyromelonz.net
 clean:
 	rm -rf "$(BIN_DIR)"
 
+clean_user: $(VAR_DIR)/*.dat
+	rm -f var/user_data.dat
+	rm -f var/user_reg.dat
+
 clean-webui:
 	$(MAKE) -C "$(WEBUI_DIR)/lib" clean
 	rm -f "$(WEBUI_LIB)"

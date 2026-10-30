@@ -3,6 +3,7 @@
 
 #include "types.h"
 
+//no pointers allowed, this is saved as binary memory
 typedef struct {
     USER_GROUPS groups;
 } user_misc_data;
