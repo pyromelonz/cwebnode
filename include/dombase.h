@@ -20,11 +20,11 @@ web_node* _DOM_horz_v(web_node* elements, ...);
 
 web_node* DOM_user_header(dummy_handler* s);
 
+/* Reusable authentication components. Form nodes can be embedded in any
+ * page; the page nodes add the headings from login.html/register.html. */
+web_node* DOM_login_form(void);
+web_node* DOM_register_form(void);
 
-///// destroy destroy destroy
-// application based doms
-
-web_node* 
 
 
 

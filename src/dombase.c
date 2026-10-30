@@ -68,9 +68,9 @@ web_node* DOM_user_header(dummy_handler* s) {
 		WL_CSS_S("color : red; padding : 10px; flex : 1","> *"),
 		WL_CSS_S("display: block; background-color: blue; color: red;padding: 10px","> a"),
 		DOM_user_greeting(s),
-		WL_HTML(a, "href=index.html","INDEX"),
-		WL_HTML(a, "href=login.html","LOGIN"),
-		WL_HTML(a, "href=register.html","REGISTER"),
+		WL_HTML(a, "href=/index","INDEX"),
+		WL_HTML(a, "href=/login","LOGIN"),
+		WL_HTML(a, "href=/register","REGISTER"),
 		WN_HTML1(div,"{::}",
 			WL_HTML1(plain,"Dotted lines, woah!"),
 			WL_JS(
@@ -85,4 +85,67 @@ web_node* DOM_user_header(dummy_handler* s) {
 	);
 	return container;
 }
+
+/* Attribute strings are trusted, static constants (never user input).
+ * Each label/input pair is itself a composable web-node tree. */
+static web_node* dom_auth_field(const char* title, const char* label_attrs,
+                                const char* input_attrs) {
+    return NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
+        WNA_SUBNODES(
+            NEW_WN(WNA_HTML(label), STRRS_REFSTC(title),
+                   STRRS_REFSTC(label_attrs)),
+            NEW_WN(WNA_HTML(input), STRRS_REFSTC(""),
+                   STRRS_REFSTC(input_attrs))
+        ));
+}
+
+typedef struct {
+    const char* form_attrs;
+    const char* username_label_attrs;
+    const char* username_input_attrs;
+    const char* password_label_attrs;
+    const char* password_input_attrs;
+    const char* submit_text;
+} dom_auth_spec;
+
+static const dom_auth_spec login_spec = {
+    .form_attrs = "action=\"/login\" method=\"post\"",
+    .username_label_attrs = "for=\"login-username\"",
+    .username_input_attrs = "type=\"text\" id=\"login-username\" name=\"username\" autocomplete=\"username\" required",
+    .password_label_attrs = "for=\"login-password\"",
+    .password_input_attrs = "type=\"password\" id=\"login-password\" name=\"password\" autocomplete=\"current-password\" required",
+    .submit_text = "Login"
+};
+
+static const dom_auth_spec register_spec = {
+    .form_attrs = "action=\"/register\" method=\"post\"",
+    .username_label_attrs = "for=\"register-username\"",
+    .username_input_attrs = "type=\"text\" id=\"register-username\" name=\"username\" autocomplete=\"username\" required",
+    .password_label_attrs = "for=\"register-password\"",
+    .password_input_attrs = "type=\"password\" id=\"register-password\" name=\"password\" autocomplete=\"new-password\" required",
+    .submit_text = "Register"
+};
+
+static web_node* dom_auth_form(const dom_auth_spec* spec) {
+    return NEW_WN(WNA_HTML(form), STRRS_STATIC(REG_HTML_GLOB),
+        STRRS_REFSTC(spec->form_attrs),
+        WNA_SUBNODES(
+            dom_auth_field("Username:", spec->username_label_attrs,
+                           spec->username_input_attrs),
+            dom_auth_field("Password:", spec->password_label_attrs,
+                           spec->password_input_attrs),
+            NEW_WN(WNA_HTML(button), STRRS_REFSTC(spec->submit_text),
+                   STRRS_REFSTC("type=\"submit\""))
+        ));
+}
+
+web_node* DOM_login_form(void) {
+    return dom_auth_form(&login_spec);
+}
+
+web_node* DOM_register_form(void) {
+    return dom_auth_form(&register_spec);
+}
+
+
 

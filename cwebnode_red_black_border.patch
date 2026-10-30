@@ -1,0 +1,294 @@
+diff --git a/STYLE_NODES.md b/STYLE_NODES.md
+new file mode 100644
+index 0000000..9b9ef8f
+--- /dev/null
++++ b/STYLE_NODES.md
+@@ -0,0 +1,47 @@
++# Reusable red background / black border CSS node
++
++`DOM_red_black_border_css()` creates an independent `WNA_CSS_REF` web node
++with a red background, `2px` solid black border, `8px` padding, and `4px`
++corner radius. It generates a CSS rule scoped to the **parent HTML element**.
++It works for `div`, `form`, `button`, `a`, and other HTML tags with a
++`WNA_CHILDREN` aspect. The same constructor can be used multiple times.
++
++Apply the default style directly to an existing container node:
++
++```c
++web_node* form = DOM_red_black_border_on(DOM_login_form());
++```
++
++Create a styled button (including the required `WNA_CHILDREN` aspect):
++
++```c
++web_node* button = NEW_WN(WNA_HTML(button), STRRS_REFSTC("Submit"),
++                          STRRS_REFSTC("type=\"submit\""),
++                          WNA_SUBNODES(DOM_red_black_border_css()));
++```
++
++Change the border thickness, padding and corner radius without editing CSS:
++
++```c
++web_node* form = DOM_register_form();
++wn_attach(form, DOM_red_black_border_css_custom(3, 12, 6));
++```
++
++For an **existing leaf** such as `WL_HTML1(plain, "Hello")`, which does not
++have `WNA_CHILDREN`, you can use a wrapping `<div>`:
++
++```c
++web_node* card = DOM_red_black_border_box(WL_HTML1(plain, "Hello"));
++```
++
++The wrapper is the styled element; it does not alter the child's attributes.
++`DOM_red_black_border_on()` styles an existing node without reordering its
++children; it returns `NULL` if the node lacks either `WNA_HTML_BODY` or
++`WNA_CHILDREN`. `wn_attach()` can be used to add a custom CSS node without
++reordering existing children. Do not attach styles to nodes without
++`WNA_CHILDREN`. To style a leaf tag **itself** rather than a wrapper,
++create it with `WNA_SUBNODES` as shown in the button example. All constructors
++return newly allocated nodes; they are freed with the containing tree.
++
++Run `./tests/run_auth_forms.sh` to exercise the CSS constructors on multiple
++HTML tags alongside the authentication form tests.
+diff --git a/include/dombase.h b/include/dombase.h
+index ef72c76..86a3ccc 100644
+--- a/include/dombase.h
++++ b/include/dombase.h
+@@ -28,6 +28,21 @@ web_node* DOM_register_form(void);
+ web_node* DOM_login_page(void);
+ web_node* DOM_register_page(void);
+ 
++/* A reusable CSS web node: attach it to an HTML node with WNA_CHILDREN.
++ * Colors are red background and black border; variants set dimensions in px.
++ * Each invocation returns a NEW node owned by its eventual parent. */
++web_node* DOM_red_black_border_css(void);
++web_node* DOM_red_black_border_css_custom(unsigned border_px,
++                                          unsigned padding_px,
++                                          unsigned radius_px);
++
++/* Style an existing HTML node that has WNA_CHILDREN without changing the
++ * order of its children. Returns target, or NULL if it cannot be styled. */
++web_node* DOM_red_black_border_on(web_node* target);
++
++/* Wrap any existing node, including leaves, in a styled <div>. */
++web_node* DOM_red_black_border_box(web_node* content);
++
+ 
+ 
+ #endif //DOMBASE_H
+diff --git a/include/web_node_aspects.h b/include/web_node_aspects.h
+index c67f180..adf30ed 100644
+--- a/include/web_node_aspects.h
++++ b/include/web_node_aspects.h
+@@ -11,6 +11,7 @@ extern const void (*wna_aspect_funcs[])(dummy_handler*, web_node*);
+ extern const void (*wna_destructors[])(void*);
+ extern const void (*wna_constructors[])(void* data, void* init, web_node* wn);
+ extern const size_t wna_struct_sizes[WNA_COUNT];
++extern const size_t wna_struct_alignments[WNA_COUNT];
+ 
+ #define HTML_TAGLIST \
+ X(plain) \
+@@ -33,6 +34,7 @@ enum WNA_HTML_TAGS {
+ };
+ 
+ size_t wna_struct_offset(wna_t aspects, wna_flag aspect);
++size_t wna_struct_size_total(wna_t aspects);
+ 
+ void* wna_get_aspect_struct(web_node* wn, wna_flag aspect);
+ 
+diff --git a/src/dombase.c b/src/dombase.c
+index b7bec26..20feceb 100644
+--- a/src/dombase.c
++++ b/src/dombase.c
+@@ -163,3 +163,42 @@ web_node* DOM_register_page(void) {
+     return dom_auth_page("New User Registration", DOM_register_form());
+ }
+ 
++
++/* A CSS_REF node styles its parent HTML element through the generated ID.
++ * Unlike global CSS, each instance can be attached wherever it is needed. */
++web_node* DOM_red_black_border_css_custom(unsigned border_px,
++                                          unsigned padding_px,
++                                          unsigned radius_px) {
++    char style[192];
++    int count = snprintf(style, sizeof(style),
++        "background-color: red; border: %upx solid black; "
++        "padding: %upx; border-radius: %upx; box-sizing: border-box;",
++        border_px, padding_px, radius_px);
++    if (count < 0 || (size_t)count >= sizeof(style)) return NULL;
++
++    /* STRRS_REFDUP is important: style[] is only alive during this call. */
++    return NEW_WN(WNA_CSS_REF, 0, STRRS_REFDUP(style));
++}
++
++web_node* DOM_red_black_border_css(void) {
++    return DOM_red_black_border_css_custom(2, 8, 4);
++}
++
++web_node* DOM_red_black_border_on(web_node* target) {
++    if (!target || !(target->aspects & WNA_HTML_BODY) ||
++        !(target->aspects & WNA_CHILDREN)) return NULL;
++
++    web_node* style = DOM_red_black_border_css();
++    if (!style) return NULL;
++    if (wn_attach(target, style) != OK) {
++        delete_web_node(style);
++        return NULL;
++    }
++    return target;
++}
++
++web_node* DOM_red_black_border_box(web_node* content) {
++    if (!content) return NULL;
++    return NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
++        WNA_SUBNODES(content, DOM_red_black_border_css()));
++}
+diff --git a/src/web_node.c b/src/web_node.c
+index dd66c17..b51b002 100644
+--- a/src/web_node.c
++++ b/src/web_node.c
+@@ -52,11 +52,9 @@ web_node* new_web_node(wna_t aspects, stk_t init_list) {
+     wn->parent = 0;
+     wn->id = 0;
+     {
+-        size_t datasize = 0;
+-        for (wna_index i = 0; i<WNA_COUNT; i++) {
+-            datasize += !!(aspects & wna_i2f(i)) * wna_struct_sizes[i];
+-        }
+-        wn->data = datasize ? sw_malloc(datasize) : 0;
++        const size_t datasize = wna_struct_size_total(aspects);
++        /* Zero-initialize aspect data: some constructors expect empty stacks. */
++        wn->data = datasize ? sw_calloc(1, datasize) : 0;
+     }
+ 
+     while (init_list) {
+diff --git a/src/web_node_aspects.c b/src/web_node_aspects.c
+index 2d3e094..ff80009 100644
+--- a/src/web_node_aspects.c
++++ b/src/web_node_aspects.c
+@@ -215,14 +215,34 @@ const void (*wna_constructors[])(void*, void*, web_node*) = {WEB_NODE_ASPECT_LIS
+ const size_t wna_struct_sizes[WNA_COUNT] = {WEB_NODE_ASPECT_LIST};
+ #undef X
+ 
+-size_t wna_struct_offset(wna_t aspects, wna_flag aspect) {
++#define X(a) _Alignof(WNA_DATA_STRUCT(a)),
++const size_t wna_struct_alignments[WNA_COUNT] = {WEB_NODE_ASPECT_LIST};
++#undef X
++
++/* Each aspect has its own C alignment requirements. In particular,
++ * CSS_REF is one byte while STRING_RESOURCE contains a pointer; simply
++ * summing sizeof(struct) values misaligns the latter. */
++static size_t wna_layout_size_to(wna_t aspects, wna_flag target) {
+     size_t offset = 0;
+-    for (wna_index i = 0; (1<<i) < aspect; i++) {
+-        offset += !!((1<<i) & aspects) * wna_struct_sizes[i];
++    for (wna_index i = 0; i < WNA_COUNT; i++) {
++        const wna_flag flag = wna_i2f(i);
++        if (!(aspects & flag)) continue;
++        const size_t align = wna_struct_alignments[i];
++        offset = (offset + align - 1) & ~(align - 1);
++        if (flag == target) return offset;
++        offset += wna_struct_sizes[i];
+     }
+     return offset;
+ }
+ 
++size_t wna_struct_offset(wna_t aspects, wna_flag aspect) {
++    return wna_layout_size_to(aspects, aspect);
++}
++
++size_t wna_struct_size_total(wna_t aspects) {
++    return wna_layout_size_to(aspects, 0);
++}
++
+ void* wna_get_aspect_struct(web_node* wn, wna_flag aspect) {
+     return ((wn->aspects & aspect) && wn->data) ? wn->data + wna_struct_offset(wn->aspects,aspect) : 0;
+ }
+\ No newline at end of file
+diff --git a/tests/README.md b/tests/README.md
+index 182187b..d9cd20a 100644
+--- a/tests/README.md
++++ b/tests/README.md
+@@ -15,3 +15,7 @@ routes render the pages. It checks successful POST submissions to `/login` and
+ 
+ AddressSanitizer and UndefinedBehaviorSanitizer are enabled; a full production
+ server build still requires the external libcwebui and third-party headers.
++
++The suite also verifies reusable red-background/black-border CSS nodes
++attached to buttons, links, forms, and wrapping `<div>` elements, including
++custom border width, padding, and radius. See `STYLE_NODES.md`.
+diff --git a/tests/test_auth_forms.c b/tests/test_auth_forms.c
+index 9685a31..e808e91 100644
+--- a/tests/test_auth_forms.c
++++ b/tests/test_auth_forms.c
+@@ -87,12 +87,69 @@ static void check_page(int register_page) {
+     free(s.output);
+ }
+ 
++/* A single style constructor can target different HTML tags. */
++static void check_red_black_border_css(void) {
++    dummy_handler s = {0};
++    web_node* button = NEW_WN(WNA_HTML(button), STRRS_REFSTC("Save"),
++        STRRS_REFSTC("type=\"button\""),
++        WNA_SUBNODES(DOM_red_black_border_css()));
++    web_node* link = NEW_WN(WNA_HTML(a), STRRS_REFSTC("Home"),
++        STRRS_REFSTC("href=\"/index\""),
++        WNA_SUBNODES(DOM_red_black_border_css()));
++    web_node* form = DOM_login_form();
++    assert(wn_attach(form, DOM_red_black_border_css_custom(3, 12, 6)) == OK);
++    web_node* register_form = DOM_red_black_border_on(DOM_register_form());
++    assert(register_form != NULL);
++    web_node* box = DOM_red_black_border_box(NEW_WN(WNA_HTML(plain), STRRS_REFSTC("Wrapped")));
++    web_node* tree = NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
++        WNA_SUBNODES(button, link, form, box, register_form));
++    web_node* root = wn_wrap_html_root(tree);
++
++    assert(wn_deliver(&s, root) == OK);
++    assert(s.output);
++    assert(strstr(s.output, "background-color: red; border: 2px solid black; "
++                            "padding: 8px; border-radius: 4px; box-sizing: border-box;") != NULL);
++    assert(strstr(s.output, "background-color: red; border: 3px solid black; "
++                            "padding: 12px; border-radius: 6px; box-sizing: border-box;") != NULL);
++    /* The styled elements themselves have IDs; no additional wrapper is
++       introduced for the button, link, or form. */
++    assert(strstr(s.output, "<button id=\"wn") != NULL);
++    assert(strstr(s.output, "<a id=\"wn") != NULL);
++    assert(strstr(s.output, "<form id=\"wn") != NULL);
++    assert(strstr(s.output, "Wrapped</div>") != NULL);
++    assert(strstr(s.output, "<div id=\"wn") != NULL);
++    /* Attaching a CSS node must not reverse a form's existing fields. */
++    const char* form_start = strstr(s.output, "<form id=\"wn");
++    assert(form_start);
++    const char* username = strstr(form_start, "for=\"login-username\"");
++    const char* password = strstr(form_start, "for=\"login-password\"");
++    const char* button_start = strstr(form_start, "<button type=\"submit\">Login</button>");
++    assert(username && password && button_start);
++    assert(username < password && password < button_start);
++    /* Verify each CSS rule actually targets its element, rather than only
++       appearing somewhere in the stylesheet. */
++    const char* tags[] = {"<button id=\"wn", "<a id=\"wn", "<form id=\"wn"};
++    for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
++        const char* element = strstr(s.output, tags[i]);
++        assert(element);
++        unsigned id = 0;
++        assert(sscanf(element + strlen(tags[i]), "%u", &id) == 1);
++        char selector[64];
++        snprintf(selector, sizeof(selector), "#wn%u  {background-color: red;", id);
++        assert(strstr(s.output, selector) != NULL);
++    }
++
++    delete_web_node(root);
++    free(s.output);
++}
++
+ static void check_page_route(int registering);
+ static void check_submission_route(int registering);
+ static unsigned login_calls, register_calls;
+ int main(void) {
+     check_page(0);
+     check_page(1);
++    check_red_black_border_css();
+     check_page_route(0);
+     check_page_route(1);
+     check_submission_route(0);

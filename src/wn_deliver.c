@@ -119,6 +119,9 @@ int wn_deliver_html(dummy_handler* s, web_node* wn) {
     if (wn->n_str_params>1) printHTML(s, " %s", get_strrs(wn,1));
     printHTML(s,">");
 
+    /* Input is an HTML void element: it has no contents or closing tag. */
+    if (data->tag == TAG_input) return 0;
+
     const char* str = get_strrs(wn,0);
 
     template_token_parse(str,deliver_html_token_func,deliver_html_rest_func,&(_dhtfc)

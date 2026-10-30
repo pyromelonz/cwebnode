@@ -90,7 +90,7 @@ web_node* _new_web_node_ooo(wna_flag aspect, ...) {
             lo = stack_push(lo,stack_pop(&hi));
         }
         aspect_list |= aspect;
-        wna_init_t* init = sw_malloc(sizeof(wna_init_t*));
+        wna_init_t* init = sw_malloc(sizeof(wna_init_t));
         init->aspect = aspect;
         init->init_struct = va_arg(args,void*);
         lo = stack_push(lo,init);

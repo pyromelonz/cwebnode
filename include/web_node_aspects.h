@@ -19,7 +19,12 @@ X(body) \
 X(ol) \
 X(ul) \
 X(li) \
-X(a)
+X(a) \
+X(h1) \
+X(form) \
+X(label) \
+X(input) \
+X(button)
 
 enum WNA_HTML_TAGS {
     #define X(a) TAG_##a,

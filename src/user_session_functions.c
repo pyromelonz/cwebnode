@@ -4,6 +4,7 @@
 #include "user_session.h"
 #include "user_data.h"
 #include "config.h"
+#include "dombase.h"
 
 #include <string.h>
 
@@ -12,15 +13,33 @@
         #include "user_auth.h"
 #endif
 
+static WS_FILE_TYPES deliver_page(dummy_handler* s, web_node* page) {
+    web_node* root = wn_wrap_html_root(page);
+    wn_deliver(s, root);
+    delete_web_node(root);
+    return WS_FILE_TYPE_HTML;
+}
+
+
+static web_node* dom_auth_page(const char* title, web_node* form) {
+    return NEW_WN(WNA_HTML(div), STRRS_STATIC(REG_HTML_GLOB),
+        WNA_SUBNODES(
+            NEW_WN(WNA_HTML(h1), STRRS_REFSTC(title)),
+            form
+        ));
+}
+
 //after macro expansion register is never parsed as a singular token - no problems
 DEFINE_WEB_RESOURCE(register, ALL_USER_GROUPS ) {
 
+    if (!getPostSize(s)) return deliver_page(s, dom_auth_page("Register user",DOM_register_form()));
+
     unsigned post_size = getPostSize(s);
 
-    uid_t user;
+    uid_t user = 0;
 
     if (post_size) {
-        LOG(DBG,"post data: %s",getPostData(s));
+        /* Do not log the POST body: it contains the user's password. */
         char *un = 0, *pw = 0;
         if (2 > read_post_data(getPostData(s), "username password",&un,&pw)) user = 0;
         else {
@@ -45,11 +64,12 @@ DEFINE_WEB_RESOURCE(register, ALL_USER_GROUPS ) {
 }
 
 DEFINE_WEB_RESOURCE(login, GUEST | USER) {
+    if (!getPostSize(s)) return deliver_page(s, dom_auth_page("Login User",DOM_login_form()));
+
     uid_t user = 0;
 
     if (getPostSize(s)) {  //form filled in
-        
-        LOG(DBG,"post data: %s",getPostData(s));
+
         char* un= 0, *pw = 0;
         if ( 2 > read_post_data(getPostData(s), "username password",&un,&pw)) {
             user = 0;
